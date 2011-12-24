@@ -6,6 +6,7 @@ namespace WebSocket;
  *
  * @author Nico Kaiser <nico@kaiser.me>
  * @author Simon Samtleben <web@lemmingzshadow.net>
+ * @author Marek Tutoky <marek@tutoky.com>
  */
 class Connection
 {
@@ -17,7 +18,7 @@ class Connection
 	private $ip;
 	private $port;
 	private $connectionId = null;
-    
+	
     public function __construct($server, $socket)
     {
 		$this->server = $server;
@@ -36,6 +37,14 @@ class Connection
     {		
         $this->log('Performing handshake');	    
         $lines = preg_split("/\r\n/", $data);
+		
+		//flash websocket policy file?
+        if (count($lines)  && preg_match('/<policy-file-request.*>/', $lines[0])) {
+        	$this->log('Serve flash policy: ' . $lines[0]);
+            $this->log('Flash policy file request');
+            $this->serveFlashPolicy();
+            return false;
+        }
 		
 		// check for valid http-header:
         if(!preg_match('/\AGET (\S+) HTTP\/1.1\z/', $lines[0], $matches))
@@ -163,7 +172,7 @@ class Connection
 		return true;
     }   
     
-    public function send($payload, $type = 'text', $masked = true)
+    public function send($payload, $type = 'text', $masked = false)
     {		
 		$encodedData = $this->hybi10Encode($payload, $type, $masked);
 		if(!socket_write($this->socket, $encodedData, strlen($encodedData)))
@@ -416,4 +425,16 @@ class Connection
 	{
 		return $this->application;
 	}
+	
+	private function serveFlashPolicy()
+    {
+        $policy = '<?xml version="1.0"?>' . "\n";
+        $policy .= '<!DOCTYPE cross-domain-policy SYSTEM "http://www.macromedia.com/xml/dtds/cross-domain-policy.dtd">' . "\n";
+        $policy .= '<cross-domain-policy>' . "\n";
+        $policy .= '<allow-access-from domain="*" to-ports="*"/>' . "\n";
+        $policy .= '</cross-domain-policy>' . "\n";
+        socket_write($this->socket, $policy, strlen($policy));
+		socket_close($this->socket);
+		$this->server->removeClient($this->socket);
+    }
 }

@@ -1,16 +1,24 @@
+/* Location of WebSocketMain.swf file */
+WEB_SOCKET_SWF_LOCATION = "js/WebSocketMain.swf";
+
+/* Uncomment for debug information in Console log */
+//WEB_SOCKET_DEBUG = true;
+
 $(document).ready(function() {		
 	log = function(msg){
 		$('#log').append(msg + '<br/>')
 	};			
 	
 	var socket;
+	var server = 'ws://localhost:8000/demo';
+	
 	if ( $.browser.mozilla )
 	{
-		socket = new MozWebSocket('ws://localhost:8000/demo');
+		socket = new MozWebSocket(server);
 	}
 	else
 	{
-		socket = new WebSocket('ws://localhost:8000/demo');
+		socket = new WebSocket(server);
 	}	
 
 	socket.onopen = function(msg){

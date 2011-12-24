@@ -19,7 +19,7 @@ $server = new \WebSocket\Server('localhost', 8000);
 $server->setMaxClients(20);
 $server->setCheckOrigin(true);
 $server->setAllowedOrigin('foo.lh');
-$server->setMaxConnectionsPerIp(5);
+$server->setMaxConnectionsPerIp(15);
 $server->setMaxRequestsPerMinute(50);
 
 $server->registerApplication('status', \WebSocket\Application\StatusApplication::getInstance());
