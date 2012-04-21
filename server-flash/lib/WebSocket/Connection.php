@@ -6,7 +6,6 @@ namespace WebSocket;
  *
  * @author Nico Kaiser <nico@kaiser.me>
  * @author Simon Samtleben <web@lemmingzshadow.net>
- * @author Marek Tutoky <marek@tutoky.com>
  */
 class Connection
 {
@@ -19,22 +18,28 @@ class Connection
 	private $port;
 	private $connectionId = null;
 	
-    public function __construct($server, $socket)
+	public $waitingForData = false;
+	private $_dataBuffer = '';
+
+	private $country = false;
+
+	public function __construct($server, $socket)
     {
 		$this->server = $server;
 		$this->socket = $socket;
 
-		// set some client-information:
-		socket_getpeername($this->socket, $ip, $port);
-		$this->ip = $ip;
-		$this->port = $port;
-		$this->connectionId = md5($ip . $port . spl_object_hash($this));
+		// set some client-information:				
+		$socketName = stream_socket_get_name($socket, true);
+		$tmp = explode(':', $socketName);		
+		$this->ip = $tmp[0];
+		$this->port = $tmp[1];		
+		$this->connectionId = md5($this->ip . $this->port . spl_object_hash($this));		
 
 		$this->log('Connected');
     }
     
     private function handshake($data)
-    {		
+    {	
         $this->log('Performing handshake');	    
         $lines = preg_split("/\r\n/", $data);
 		
@@ -50,7 +55,8 @@ class Connection
         if(!preg_match('/\AGET (\S+) HTTP\/1.1\z/', $lines[0], $matches))
 		{
             $this->log('Invalid request: ' . $lines[0]);
-            socket_close($this->socket);
+			$this->sendHttpResponse(400);
+            stream_socket_shutdown($this->socket, STREAM_SHUT_RDWR);
             return false;
         }                
 		
@@ -60,7 +66,9 @@ class Connection
         if(!$this->application)
 		{
             $this->log('Invalid application: ' . $path);
-            socket_close($this->socket);
+			$this->sendHttpResponse(404);           
+			stream_socket_shutdown($this->socket, STREAM_SHUT_RDWR);
+			$this->server->removeClientOnError($this);
             return false;
         }
 
@@ -79,7 +87,9 @@ class Connection
 		if(!isset($headers['Sec-WebSocket-Version']) || $headers['Sec-WebSocket-Version'] < 6)
 		{
 			$this->log('Unsupported websocket version.');
-            socket_close($this->socket);
+			$this->sendHttpResponse(501);
+			stream_socket_shutdown($this->socket, STREAM_SHUT_RDWR);
+			$this->server->removeClientOnError($this);
             return false;
 		}
 		
@@ -91,21 +101,27 @@ class Connection
 			if($origin === false)
 			{
 				$this->log('No origin provided.');
-				$this->close(1002);
+				$this->sendHttpResponse(401);
+				stream_socket_shutdown($this->socket, STREAM_SHUT_RDWR);
+				$this->server->removeClientOnError($this);
 				return false;
 			}
 			
 			if(empty($origin))
 			{
 				$this->log('Empty origin provided.');
-				$this->close(1002);
+				$this->sendHttpResponse(401);
+				stream_socket_shutdown($this->socket, STREAM_SHUT_RDWR);
+				$this->server->removeClientOnError($this);
 				return false;
 			}
 			
 			if($this->server->checkOrigin($origin) === false)
 			{
 				$this->log('Invalid origin provided.');
-				$this->close(1002);
+				$this->sendHttpResponse(401);
+				stream_socket_shutdown($this->socket, STREAM_SHUT_RDWR);
+				$this->server->removeClientOnError($this);
 				return false;
 			}
 		}		
@@ -117,8 +133,11 @@ class Connection
 		$response.= "Upgrade: websocket\r\n";
 		$response.= "Connection: Upgrade\r\n";
 		$response.= "Sec-WebSocket-Accept: " . $secAccept . "\r\n";
-		$response.= "Sec-WebSocket-Protocol: " . substr($path, 1) . "\r\n\r\n";
-		socket_write($this->socket, $response, strlen($response));        
+		$response.= "Sec-WebSocket-Protocol: " . substr($path, 1) . "\r\n\r\n";		
+		if(false === ($this->server->writeBuffer($this->socket, $response)))
+		{
+			return false;
+		}
 		$this->handshaked = true;
 		$this->log('Handshake sent');
 		$this->application->onConnect($this);
@@ -132,11 +151,40 @@ class Connection
 		return true;			
     }
     
-    public function onData($data)
+	public function sendHttpResponse($httpStatusCode = 400)
+	{
+		$httpHeader = 'HTTP/1.1 ';
+		switch($httpStatusCode)
+		{
+			case 400:
+				$httpHeader .= '400 Bad Request';
+			break;
+		
+			case 401:
+				$httpHeader .= '401 Unauthorized';
+			break;
+		
+			case 403:
+				$httpHeader .= '403 Forbidden';
+			break;
+		
+			case 404:
+				$httpHeader .= '404 Not Found';
+			break;
+		
+			case 501:
+				$httpHeader .= '501 Not Implemented';
+			break;
+		}
+		$httpHeader .= "\r\n";
+		$this->server->writeBuffer($this->socket, $httpHeader);
+	}
+	
+	public function onData($data)
     {		
-        if ($this->handshaked)
+        if($this->handshaked)
 		{			
-            $this->handle($data);
+            return $this->handle($data);
         }
 		else
 		{
@@ -145,14 +193,50 @@ class Connection
     }
     
     private function handle($data)
-    {	
+    {
+		if($this->waitingForData === true)
+		{
+			$data = $this->_dataBuffer . $data;
+			$this->_dataBuffer = '';
+			$this->waitingForData = false;
+		}
+		
 		$decodedData = $this->hybi10Decode($data);		
+		
+		if($decodedData === false)
+		{
+			$this->waitingForData = true;
+			$this->_dataBuffer .= $data;
+			return false;
+		}
+		else
+		{
+			$this->_dataBuffer = '';
+			$this->waitingForData = false;
+		}
+		
+		// trigger status application:
+		if($this->server->getApplication('status') !== false)
+		{
+			$this->server->getApplication('status')->clientActivity($this->port);
+		}
 		
 		switch($decodedData['type'])
 		{
-			case 'text':
+			case 'text':				
 				$this->application->onData($decodedData['payload'], $this);
-			break;			
+			break;
+		
+			case 'binary':
+				if(method_exists($this->application, 'onBinaryData'))
+				{
+					$this->application->onBinaryData($decodedData['payload'], $this);
+				}
+				else
+				{
+					$this->close(1003);
+				}
+			break;
 		
 			case 'ping':
 				$this->send($decodedData['payload'], 'pong', false);
@@ -174,12 +258,13 @@ class Connection
     
     public function send($payload, $type = 'text', $masked = false)
     {		
-		$encodedData = $this->hybi10Encode($payload, $type, $masked);
-		if(!socket_write($this->socket, $encodedData, strlen($encodedData)))
+		$encodedData = $this->hybi10Encode($payload, $type, $masked);			
+		if(!$this->server->writeBuffer($this->socket, $encodedData))
 		{
-			socket_close($this->socket);
-			$this->socket = false;
+			$this->server->removeClientOnError($this);
+			return false;
 		}
+		return true;
     }
 	
 	public function close($statusCode = 1000)
@@ -214,15 +299,23 @@ class Connection
 			case 1007:
 				$payload .= 'utf8 expected';
 			break;
+		
+			case 1008:
+				$payload .= 'message violates server policy';
+			break;
 		}
-		$this->send($payload, 'close', false);
+		
+		if($this->send($payload, 'close', false) === false)
+		{
+			return false;
+		}
 		
 		if($this->application)
 		{
             $this->application->onDisconnect($this);
         }
-		socket_close($this->socket);
-		$this->server->removeClient($this->socket);
+		stream_socket_shutdown($this->socket, STREAM_SHUT_RDWR);
+		$this->server->removeClientOnClose($this);
 	}
 
 
@@ -322,8 +415,8 @@ class Connection
 		return $frame;
 	}
 	
-	function hybi10Decode($data)
-	{		
+	private function hybi10Decode($data)
+	{
 		$payloadLength = '';
 		$mask = '';
 		$unmaskedPayload = '';
@@ -347,6 +440,10 @@ class Connection
 			// text frame:
 			case 1:
 				$decodedData['type'] = 'text';				
+			break;
+		
+			case 2:
+				$decodedData['type'] = 'binary';
 			break;
 			
 			// connection close frame:
@@ -374,26 +471,46 @@ class Connection
 		{
 		   $mask = substr($data, 4, 4);
 		   $payloadOffset = 8;
+		   $dataLength = bindec(sprintf('%08b', ord($data[2])) . sprintf('%08b', ord($data[3]))) + $payloadOffset;
 		}
 		elseif($payloadLength === 127)
 		{
 			$mask = substr($data, 10, 4);
 			$payloadOffset = 14;
+			$tmp = '';
+			for($i = 0; $i < 8; $i++)
+			{
+				$tmp .= sprintf('%08b', ord($data[$i+2]));
+			}
+			$dataLength = bindec($tmp) + $payloadOffset;
+			unset($tmp);
 		}
 		else
 		{
 			$mask = substr($data, 2, 4);	
 			$payloadOffset = 6;
+			$dataLength = $payloadLength + $payloadOffset;
 		}
 		
-		$dataLength = strlen($data);
+		/**
+		 * We have to check for large frames here. socket_recv cuts at 1024 bytes
+		 * so if websocket-frame is > 1024 bytes we have to wait until whole
+		 * data is transferd. 
+		 */
+		if(strlen($data) < $dataLength)
+		{			
+			return false;
+		}
 		
 		if($isMasked === true)
 		{
 			for($i = $payloadOffset; $i < $dataLength; $i++)
 			{
 				$j = $i - $payloadOffset;
-				$unmaskedPayload .= $data[$i] ^ $mask[$j % 4];
+				if(isset($data[$i]))
+				{
+					$unmaskedPayload .= $data[$i] ^ $mask[$j % 4];
+				}
 			}
 			$decodedData['payload'] = $unmaskedPayload;
 		}
@@ -421,9 +538,14 @@ class Connection
 		return $this->connectionId;
 	}
 	
+	public function getClientSocket()
+	{
+		return $this->socket;
+	}
+	
 	public function getClientApplication()
 	{
-		return $this->application;
+		return (isset($this->application)) ? $this->application : false;
 	}
 	
 	private function serveFlashPolicy()
@@ -432,9 +554,25 @@ class Connection
         $policy .= '<!DOCTYPE cross-domain-policy SYSTEM "http://www.macromedia.com/xml/dtds/cross-domain-policy.dtd">' . "\n";
         $policy .= '<cross-domain-policy>' . "\n";
         $policy .= '<allow-access-from domain="*" to-ports="*"/>' . "\n";
-        $policy .= '</cross-domain-policy>' . "\n";
-        socket_write($this->socket, $policy, strlen($policy));
-		$this->server->removeClient($this->socket);
-		socket_close($this->socket);
+        $policy .= '</cross-domain-policy>' . "\n\0";
+
+		if(!$this->server->writeBuffer($this->socket, $policy))
+		{
+			$this->server->removeClientOnError($this);
+			$this->log('We have a flash policy problem :(');
+			return false;
+		}
+		$this->log('File sent!');
     }
+	
+	public function getClientCountry() {
+		if($this->country) {
+			return $this->country;
+		}
+		else {
+			$this->country = strtolower(geoip_country_code_by_name($this->ip));
+			return $this->country;
+		}
+		return '_world';
+	}
 }

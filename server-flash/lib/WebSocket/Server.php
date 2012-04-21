@@ -2,7 +2,7 @@
 namespace WebSocket;
 
 /**
- * Waschsalon WSS
+ * Shiny WSS
  *
  * @author Nico Kaiser <nico@kaiser.me>
  * @author Simon Samtleben <web@lemmingzshadow.net>
@@ -21,9 +21,9 @@ class Server extends Socket
 	private $_maxConnectionsPerIp = 5;
 	private $_maxRequestsPerMinute = 50;
 
-    public function __construct($host = 'localhost', $port = 8000)
+    public function __construct($host = 'localhost', $port = 8000, $ssl = false)
     {
-        parent::__construct($host, $port);
+        parent::__construct($host, $port, $ssl);
         $this->log('Server created');
     }
 
@@ -35,12 +35,12 @@ class Server extends Socket
 		while(true)
 		{
 			$changed_sockets = $this->allsockets;
-			socket_select($changed_sockets, $write = null, $except = null, 1);
+			@stream_select($changed_sockets, $write = null, $except = null, 0, 5000);
 			foreach($changed_sockets as $socket)
 			{
 				if($socket == $this->master)
 				{
-					if(($ressource = socket_accept($this->master)) < 0)
+					if(($ressource = stream_socket_accept($this->master)) === false)
 					{
 						$this->log('Socket error: ' . socket_strerror(socket_last_error($ressource)));
 						continue;
@@ -54,29 +54,45 @@ class Server extends Socket
 						if(count($this->clients) > $this->_maxClients)
 						{
 							$client->onDisconnect();
+							if($this->getApplication('status') !== false)
+							{
+								$this->getApplication('status')->statusMsg('Attention: Client Limit Reached!', 'warning');
+							}
 							continue;
 						}
 						
-						$this->_addIpToStoragee($client->getClientIp());
+						$this->_addIpToStorage($client->getClientIp());
 						if($this->_checkMaxConnectionsPerIp($client->getClientIp()) === false)
 						{
 							$client->onDisconnect();
+							if($this->getApplication('status') !== false)
+							{
+								$this->getApplication('status')->statusMsg('Connection/Ip limit for ip ' . $client->getClientIp() . ' was reached!', 'warning');
+							}
 							continue;
 						}						
 					}
 				}
 				else
 				{
-					$client = $this->clients[(int)$socket];
-					$bytes = @socket_recv($socket, $data, 4096, 0);					
-					if($bytes === false)
+					$client = $this->clients[(int)$socket];									
+					$data = $this->readBuffer($socket);					
+					$bytes = strlen($data);
+					
+					if($bytes === 0)
+					{
+						$client->onDisconnect();
+						//$this->removeClientOnError($client);
+						continue;
+					}
+					elseif($data === false)
 					{
 						$this->removeClientOnError($client);
 						continue;
 					}
-					elseif($bytes === 0 || $this->_checkRequestLimit($client->getClientId()) === false)
+					elseif($client->waitingForData === false && $this->_checkRequestLimit($client->getClientId()) === false)
 					{
-						$client->onDisconnect();						
+						$client->onDisconnect();
 					}
 					else
 					{						
@@ -85,7 +101,7 @@ class Server extends Socket
 				}
 			}
 		}
-	}
+	}	
 
 	/**
 	 * Returns a server application.
@@ -95,14 +111,15 @@ class Server extends Socket
 	 */
 	public function getApplication($key)
 	{
+		if(empty($key))
+		{
+			return false;
+		}
 		if(array_key_exists($key, $this->applications))
 		{
 			return $this->applications[$key];
 		}
-		else
-		{
-			return false;
-		}
+		return false;
 	}
 
 	/**
@@ -114,6 +131,17 @@ class Server extends Socket
     public function registerApplication($key, $application)
     {
         $this->applications[$key] = $application;
+		
+		// status is kind of a system-app, needs some special cases:
+		if($key === 'status')
+		{
+			$serverInfo = array(
+				'maxClients' => $this->_maxClients,
+				'maxConnectionsPerIp' => $this->_maxConnectionsPerIp,
+				'maxRequetsPerMinute' => $this->_maxRequestsPerMinute,
+			);
+			$this->applications[$key]->setServerInfo($serverInfo);
+		}
     }
     
 	/**
@@ -134,13 +162,9 @@ class Server extends Socket
 	 */
 	public function removeClientOnClose($client)
 	{		
-		// trigger status application:
-		if($this->getApplication('status') !== false)
-		{
-			$this->getApplication('status')->clientDisconnected($client->getClientIp(), $client->getClientPort());
-		}
-		
 		$clientId = $client->getClientId();
+		$clientIp = $client->getClientIp();
+		$clientPort = $client->getClientPort();
 		$resource = $client->getClientSocket();
 		
 		$this->_removeIpFromStorage($client->getClientIp());
@@ -150,8 +174,14 @@ class Server extends Socket
 		}
 		unset($this->clients[(int)$resource]);
 		$index = array_search($resource, $this->allsockets);
-		unset($this->allsockets[$index]);
-		unset($client, $clientId);	
+		unset($this->allsockets[$index], $client);		
+		
+		// trigger status application:
+		if($this->getApplication('status') !== false)
+		{
+			$this->getApplication('status')->clientDisconnected($clientIp, $clientPort);
+		}
+		unset($clientId, $clientIp, $clientPort, $resource);		
 	}
 	
 	/**
@@ -159,14 +189,7 @@ class Server extends Socket
 	 * @param object $client The client object to remove.
 	 */
 	public function removeClientOnError($client)
-	{
-		// trigger status application:
-		if($this->getApplication('status') !== false)
-		{
-			$this->getApplication('status')->clientDisconnected($client->getClientIp(), $client->getClientPort());
-		}
-		
-		// remove reference in clients app:
+	{		// remove reference in clients app:
 		if($client->getClientApplication() !== false)
 		{
 			$client->getClientApplication()->onDisconnect($client);	
@@ -174,6 +197,8 @@ class Server extends Socket
         
 		$resource = $client->getClientSocket();
 		$clientId = $client->getClientId();
+		$clientIp = $client->getClientIp();
+		$clientPort = $client->getClientPort();
 		$this->_removeIpFromStorage($client->getClientIp());
 		if(isset($this->_requestStorage[$clientId]))
 		{
@@ -181,9 +206,14 @@ class Server extends Socket
 		}
 		unset($this->clients[(int)$resource]);
 		$index = array_search($resource, $this->allsockets);
-		unset($this->allsockets[$index]);
-		unset($client, $clientId, $resource);
+		unset($this->allsockets[$index], $client);		
 		
+		// trigger status application:
+		if($this->getApplication('status') !== false)
+		{
+			$this->getApplication('status')->clientDisconnected($clientIp, $clientPort);
+		}
+		unset($resource, $clientId, $clientIp, $clientPort);		
 	}
 	
 	/**
@@ -196,6 +226,7 @@ class Server extends Socket
 	public function checkOrigin($domain)
 	{
 		$domain = str_replace('http://', '', $domain);
+		$domain = str_replace('https://', '', $domain);
 		$domain = str_replace('www.', '', $domain);
 		$domain = str_replace('/', '', $domain);
 		
@@ -207,7 +238,7 @@ class Server extends Socket
 	 * 
 	 * @param string $ip An ip address.
 	 */
-	private function _addIpToStoragee($ip)
+	private function _addIpToStorage($ip)
 	{
 		if(isset($this->_ipStorage[$ip]))
 		{

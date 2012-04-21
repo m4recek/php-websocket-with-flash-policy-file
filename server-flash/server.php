@@ -13,15 +13,18 @@ require(__DIR__ . '/lib/SplClassLoader.php');
 $classLoader = new SplClassLoader('WebSocket', __DIR__ . '/lib');
 $classLoader->register();
 
-$server = new \WebSocket\Server('localhost', 8000);
+$server = new \WebSocket\Server('localhost', 8000, false);
 
 // server settings:
-$server->setMaxClients(20);
+$server->setMaxClients(2000);
 $server->setCheckOrigin(true);
 $server->setAllowedOrigin('foo.lh');
-$server->setMaxConnectionsPerIp(15);
-$server->setMaxRequestsPerMinute(50);
+$server->setMaxConnectionsPerIp(50);
+$server->setMaxRequestsPerMinute(500);
 
+
+// Hint: Status application should not be removed as it displays usefull server informations:
 $server->registerApplication('status', \WebSocket\Application\StatusApplication::getInstance());
 $server->registerApplication('demo', \WebSocket\Application\DemoApplication::getInstance());
+
 $server->run();
