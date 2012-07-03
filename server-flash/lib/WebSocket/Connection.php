@@ -132,8 +132,7 @@ class Connection
 		$response = "HTTP/1.1 101 Switching Protocols\r\n";
 		$response.= "Upgrade: websocket\r\n";
 		$response.= "Connection: Upgrade\r\n";
-		$response.= "Sec-WebSocket-Accept: " . $secAccept . "\r\n";
-		$response.= "Sec-WebSocket-Protocol: " . substr($path, 1) . "\r\n\r\n";		
+		$response.= "Sec-WebSocket-Accept: " . $secAccept . "\r\n\r\n";
 		if(false === ($this->server->writeBuffer($this->socket, $response)))
 		{
 			return false;
