@@ -30,4 +30,4 @@ This creates a server on localhost:8000 with one Application that listens on `ws
 - [jQuery](http://jquery.com/)
 
 ## Live example
-[Gomoku game] on (http://www.gomogkulive.eu)
+[Gomoku game] (http://www.gomokulive.eu) on (www.gomokulive.eu)
