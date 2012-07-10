@@ -28,3 +28,6 @@ This creates a server on localhost:8000 with one Application that listens on `ws
 - [web-socket-js] (https://github.com/gimite/web-socket-js) by Hiroshi Ichikawa <http://gimite.net/en/>
 - [SplClassLoader](http://gist.github.com/221634) by the PHP Standards Working Group
 - [jQuery](http://jquery.com/)
+
+## Live example
+[Gomoku game] on (http://www.gomogkulive.eu)
