@@ -1,33 +1,13 @@
 PHP WebSocket
 =============
-A websocket server implemented in php.
 
-- Supports flash websocket policy file!
-- Supports websocket draft hybi-10 (Currently tested with Chrome 16 and Firefox 8).
-- Supports origin-check.
-- Supports various security/performance settings.
-- Application module, the server can be extended by custom behaviors.
+Once upon a time, in a world where we had giant screens, IE 6 and every website used flash and animated gifs for email links. We had to find solution how to use brand new, exciting technology while keeping backwards compatibility. And that ment support for flash websockets. This repo did very good back then, it was used in games, chat rooms, it was loved by fellow developers...
 
-## Server example
+### But that world is gone!
 
-This creates a server on localhost:8000 with one Application that listens on `ws://localhost:8000/demo`:
+And so is support for this repo. Code will sit here for a while, and eventually will be deleted.
 
-	$server = new \WebSocket\Server('localhost', 8000);
 
-	// server settings:	
-	$server->setCheckOrigin(true);
-	$server->setAllowedOrigin('foo.lh');
-	$server->setMaxClients(20);
-	$server->setMaxConnectionsPerIp(15); 
-	$server->setMaxRequestsPerMinute(50);
-
-	$server->registerApplication('demo', \WebSocket\Application\DemoApplication::getInstance());
-	$server->run();
-
-## Libraries used
-- [web-socket-js] (https://github.com/gimite/web-socket-js) by Hiroshi Ichikawa <http://gimite.net/en/>
-- [SplClassLoader](http://gist.github.com/221634) by the PHP Standards Working Group
-- [jQuery](http://jquery.com/)
-
-## Live example
-[Gomoku game] (http://www.gomokulive.eu) on (www.gomokulive.eu)
+### Where to go next:
+- If you are interested in websockets your best choice will be http://socket.io/ running on https://nodejs.org/en/.
+- If you have to stick with php, use original repo https://github.com/nekudo/php-websocket, there is no need for flash support nowadays :)
